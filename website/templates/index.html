@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AMP-chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        body { background: #f8f9fa; font-size: 14px; }
+        .container { max-width: 900px; margin-top: 40px; }
+        .answer-box { min-height: 120px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px #eee; }
+        #chat-box { height: 500px !important; }
+        /* Markdown typography tuning in chat */
+        #chat-box h1 { font-size: 1.2rem; margin: 0.4rem 0; }
+        #chat-box h2 { font-size: 1.1rem; margin: 0.4rem 0; }
+        #chat-box h3 { font-size: 1rem; margin: 0.35rem 0; }
+        #chat-box p { margin: 0.35rem 0; }
+        #chat-box ul, #chat-box ol { margin: 0.35rem 0 0.35rem 1.2rem; }
+        #chat-box code { font-size: 0.9em; }
+        /* Assistant bubble table styling */
+        .assistant table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .assistant thead th { background: #f6f6f6; }
+        .assistant th, .assistant td { border: 1px solid #e3e3e3; padding: 6px 8px; vertical-align: top; }
+        .assistant tr:nth-child(even) td { background: #fbfbfb; }
+
+        @media (max-width: 991px) {
+            .container { max-width: 98vw; }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+</head>
+<body>
+<div class="container position-relative">
+    <div class="d-flex align-items-center mb-3">
+        <img src="/images/igem.png" alt="igem logo" style="height:100px;width:auto;object-fit:contain;margin-right:18px;">
+        <h2 class="mb-0">AMP-chat</h2>
+    </div>
+    <div id="chat-box" style="height: 500px; overflow-y: auto; background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px #eee; margin-bottom: 16px;"></div>
+    <form id="qa-form" class="d-flex gap-2">
+        <input type="text" class="form-control" id="question" required autocomplete="off" placeholder="Enter your question...">
+        <button type="submit" class="btn btn-primary d-flex align-items-center" id="submit-btn">
+            <span id="btn-text">Send</span>
+            <span id="loading-spinner" class="spinner-border spinner-border-sm d-none ms-2" role="status" aria-hidden="true"></span>
+        </button>
+    </form>
+</div>
+<script>
+let messages = [];
+const chatBox = document.getElementById('chat-box');
+const qaForm = document.getElementById('qa-form');
+const questionInput = document.getElementById('question');
+const submitBtn = document.getElementById('submit-btn');
+const btnText = document.getElementById('btn-text');
+const spinner = document.getElementById('loading-spinner');
+
+if (window.marked) {
+    marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false });
+}
+
+function normalizeMarkdown(md) {
+    if (!md) return '';
+    let s = md.replace(/\r\n/g, '\n');
+    // Insert blank line before headings not at start of line, e.g., '...].### Title' -> '...].\n\n### Title'
+    s = s.replace(/([^\n])(\s*)(#{1,6}\s)/g, '$1\n\n$3');
+    // Ensure a blank line AFTER any markdown heading line
+    s = s.replace(/^(#{1,6}\s[^\n]+)\n(?!\n)/gm, '$1\n\n');
+    // Ensure blank line before a markdown table row starting with '|'
+    s = s.replace(/([^\n])\n(\|)/g, '$1\n\n$2');
+    return s;
+}
+
+function renderChat() {
+    chatBox.innerHTML = '';
+    messages.forEach(msg => {
+        const outer = document.createElement('div');
+        outer.className = 'mb-2';
+
+        const row = document.createElement('div');
+        row.className = (msg.role === 'user') ? 'd-flex justify-content-end' : 'd-flex justify-content-start';
+
+        const bubble = document.createElement('div');
+        bubble.className = (msg.role === 'user') ? 'p-2 bg-primary text-white rounded' : 'p-2 bg-light border rounded';
+        if (msg.role !== 'user') bubble.classList.add('assistant');
+        bubble.style.maxWidth = '70%';
+        bubble.style.overflowWrap = 'anywhere';
+
+        if (msg.role === 'user') {
+            // Display user messages as plain text to avoid injection
+            bubble.textContent = msg.content;
+        } else {
+            // Render assistant messages as Markdown (including line breaks, **bold**, lists, code blocks, etc.); normalize first to ensure blank lines before headings and tables
+            const md = normalizeMarkdown(msg.content);
+            let html = (window.marked && typeof marked.parse === 'function') ? marked.parse(md) : md.replace(/\n/g, '<br/>');
+            if (window.DOMPurify) html = DOMPurify.sanitize(html);
+            bubble.innerHTML = html;
+        }
+
+        row.appendChild(bubble);
+        outer.appendChild(row);
+        chatBox.appendChild(outer);
+    });
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+qaForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const question = questionInput.value.trim();
+    if (!question) return;
+    messages.push({ role: 'user', content: question });
+    renderChat();
+    questionInput.value = '';
+    submitBtn.disabled = true;
+    btnText.textContent = 'Thinking...';
+    spinner.classList.remove('d-none');
+    let aiMsg = { role: 'assistant', content: '' };
+    messages.push(aiMsg);
+    renderChat();
+    const evtSource = new EventSourcePolyfill('/ask_stream', {
+        headers: { 'Content-Type': 'application/json' },
+        payload: JSON.stringify({ question, messages: messages.slice(0, -1) }),
+        method: 'POST',
+    });
+    evtSource.onmessage = function(event) {
+        if (event.data === '[DONE]') {
+            evtSource.close();
+            submitBtn.disabled = false;
+            btnText.textContent = 'Send';
+            spinner.classList.add('d-none');
+            renderChat();
+            return;
+        }
+        aiMsg.content += event.data;
+        renderChat();
+    };
+    evtSource.onerror = function(err) {
+        aiMsg.content = 'Request failed: ' + err;
+        evtSource.close();
+        submitBtn.disabled = false;
+        btnText.textContent = 'Send';
+        spinner.classList.add('d-none');
+        renderChat();
+    };
+});
+// EventSource Polyfill for POST
+class EventSourcePolyfill {
+    constructor(url, options) {
+        this.url = url;
+        this.options = options;
+        this.eventSource = null;
+        this.init();
+    }
+    init() {
+        fetch(this.url, {
+            method: this.options.method || 'POST',
+            headers: this.options.headers,
+            body: this.options.payload
+        }).then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            const read = () => {
+                reader.read().then(({ done, value }) => {
+                    if (done) return;
+                    buffer += decoder.decode(value, { stream: true });
+                    let parts = buffer.split('\n\n');
+                    buffer = parts.pop();
+                    for (let part of parts) {
+                        if (part.startsWith('data: ')) {
+                            const data = part.slice(6);
+                            this.onmessage && this.onmessage({ data });
+                        } else if (part.startsWith('event: error')) {
+                            this.onerror && this.onerror(part);
+                        }
+                    }
+                    read();
+                });
+            };
+            read();
+        });
+    }
+    close() {
+        // no-op for fetch polyfill
+    }
+}
+
+</script>
+</body>
+</html>

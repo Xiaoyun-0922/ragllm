@@ -1,0 +1,1 @@
+Just like the test2 I shown in the wiki (OUC-haide), I just remain 4 pdf files in the datasets folder for testing purpose. If you want to apply this project to your own research, you can add your own pdf files to this folder.
