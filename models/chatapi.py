@@ -36,7 +36,7 @@ class DeepSeekChat:
 # Usage example
 if __name__ == "__main__":
     # Replace with your DeepSeek API Key
-    API_KEY = "sk-b9b72de3f534424f8bf41f5047f8658b"
+    API_KEY = "..."
 
     chat = DeepSeekChat(API_KEY)
 
@@ -55,4 +55,5 @@ if __name__ == "__main__":
     messages.append({"role": "user", "content": "How to learn deep learning"})
 
     response = chat.chat(messages)
+
     print("AI Response:", response["choices"][0]["message"]["content"])
